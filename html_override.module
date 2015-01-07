@@ -1,0 +1,115 @@
+<?php
+
+
+function html_override_form_alter(&$form, &$form_state, $form_id) {
+  $types = variable_get('html_override_types', array());
+  if (array_search(str_replace('_node_form','',$form_id), $types)) {
+    $html_override = (array_search($form['nid']['#value'], variable_get('html_override_nids', array())) !== FALSE) ? TRUE : FALSE;
+    $form['html_override'] = array(
+      '#type' => 'checkbox', 
+      '#title' => t('Override the default template with the content in the body field of this node.'),
+      '#weight' => -4,
+      '#default_value' => $html_override,
+    );
+  }
+}
+
+function html_override_node_insert($node) {
+  html_override_set_override($node);
+}
+
+function html_override_node_update($node) {
+  html_override_set_override($node);
+}
+
+function html_override_set_override($node) {
+  $nid = (int)$node->nid;
+  $nids = variable_get('html_override_nids', array());
+  if ($node->html_override) {
+    $nids[$nid] = $nid;
+  } else {
+    unset($nids[$nid]);
+  }
+  variable_set('html_override_nids', $nids);
+  $destination = array('destination' => 'node/' . $node->nid);
+  drupal_set_message(html_override_cache_clear_markup($destination));
+}
+
+function html_override_cache_clear_markup($destination = NULL) {
+  $destination = ($destination) ? $destination : drupal_get_destination();
+  $options = array('query' => $destination + array('token' => drupal_get_token('admin/config/html-override/flush-cache')));
+  $link = l('click here', 'admin/config/html-override/flush-cache', $options);
+  $message = "If your HTML override settings have not taken effect, then " . $link . " to clear caches.";
+  return $message;
+}
+
+
+function html_override_settings_form() {
+  $types = node_type_get_types();
+  $options = array();
+  foreach ($types AS $type => $data) {
+    $options[$type] = $data->name;
+  }
+  $form['html_override_types'] = array(
+    '#type' => 'select',
+    '#title' => t('Overrideable node types'),
+    '#options' => $options,
+    '#default_value' => variable_get('html_override_types', array()),
+    '#multiple' => TRUE,
+    '#description' => t('Select the content types which can override the site\'s theme.'),
+  );
+  $form['item'] = array(
+    '#type' => 'item',
+    '#markup' => html_override_cache_clear_markup(),
+  );
+  
+  return system_settings_form($form);
+}
+
+
+function html_override_flush_cache() {
+  if (!isset($_GET['token']) || !drupal_valid_token($_GET['token'], current_path())) {
+    return MENU_ACCESS_DENIED;
+  }
+  drupal_flush_all_caches();
+  drupal_set_message(t('Every cache cleared.'));
+  drupal_goto();
+}
+
+function html_override_menu() {
+  $items['admin/config/html-override'] = array(
+    'title' => 'HTML Override Settings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('html_override_settings_form'),
+    'access arguments' => array('administer content types'),
+  );
+  $items['admin/config/html-override/flush-cache'] = array(
+    'page callback' => 'html_override_flush_cache',
+    'access arguments' => array('flush caches'),
+    'type' => MENU_CALLBACK,
+  );
+  $nids = variable_get('html_override_nids', array());
+  foreach ($nids AS $nid) {
+    $sources[] = 'node/' . $nid;
+    $items['node/' . $nid] = array(
+      'delivery callback' => 'html_override_deliver'
+    );
+  }
+  $query = db_select('url_alias', 'u')
+    ->fields('u', array('alias'))
+    ->condition('source', $sources, 'IN');
+  $result = $query->execute()->fetchAllKeyed(0,0);
+  foreach ($result AS $path) {
+    $items[$path] = array(
+      'delivery callback' => 'html_override_deliver'
+    );
+  }
+  return $items;
+}
+
+function html_override_deliver($data) {
+  $path = explode('/',$_GET['q']);
+  $nid = array_pop($path);
+  $node = node_load($nid);
+  print $node->body['und'][0]['value'];
+}

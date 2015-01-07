@@ -1,0 +1,3 @@
+name = HTML Override
+description = Enable the body field to be the entirety of the HTML served to the browser.
+core = 7.x
