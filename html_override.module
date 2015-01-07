@@ -1,6 +1,9 @@
 <?php
 
 
+/**
+ * Implements hook_form_alter().
+ */
 function html_override_form_alter(&$form, &$form_state, $form_id) {
   $types = variable_get('html_override_types', array());
   if (array_search(str_replace('_node_form','',$form_id), $types)) {
@@ -8,22 +11,39 @@ function html_override_form_alter(&$form, &$form_state, $form_id) {
     $form['html_override'] = array(
       '#type' => 'checkbox', 
       '#title' => t('Override the default template with the content in the body field of this node.'),
-      '#weight' => -4,
+      '#weight' => -4,  // Might need to make this dynamic
       '#default_value' => $html_override,
     );
   }
 }
 
+/**
+ * Implements hook_node_insert().
+ */
 function html_override_node_insert($node) {
-  html_override_set_override($node);
+  _html_override_set_override($node);
 }
 
+
+/**
+ * Implements hook_node_update().
+ */
 function html_override_node_update($node) {
-  html_override_set_override($node);
+  _html_override_set_override($node);
 }
 
-function html_override_set_override($node) {
+
+/**
+ * Helper function to set the variable which tracks overridden nodes.
+ *
+ * @param $node
+ *   object Drupal node.
+ *
+ */
+function _html_override_set_override($node) {
+  // Results in cleaner html_override_nids variable array
   $nid = (int)$node->nid;
+
   $nids = variable_get('html_override_nids', array());
   if ($node->html_override) {
     $nids[$nid] = $nid;
@@ -31,19 +51,38 @@ function html_override_set_override($node) {
     unset($nids[$nid]);
   }
   variable_set('html_override_nids', $nids);
+
   $destination = array('destination' => 'node/' . $node->nid);
+
+  // Set the cache clearing message if the override did not take hold.
   drupal_set_message(html_override_cache_clear_markup($destination));
 }
 
+
+
+/**
+ * Generate text and a link to clear cached and make the overrides current within the
+ * routing table.
+ *
+ * @param $destination
+ *   array corresponding instructure to the return value of drupal_get_destination().
+ *
+ * @return
+ *   string HTML markup including a tokenized link to a cache clearing function
+ */
 function html_override_cache_clear_markup($destination = NULL) {
   $destination = ($destination) ? $destination : drupal_get_destination();
   $options = array('query' => $destination + array('token' => drupal_get_token('admin/config/html-override/flush-cache')));
-  $link = l('click here', 'admin/config/html-override/flush-cache', $options);
+  $link = l(t('click here'), 'admin/config/html-override/flush-cache', $options);
+  
+  // To Do: t() this message.
   $message = "If your HTML override settings have not taken effect, then " . $link . " to clear caches.";
   return $message;
 }
 
-
+/**
+ * Implements hook_form().
+ */
 function html_override_settings_form() {
   $types = node_type_get_types();
   $options = array();
@@ -67,6 +106,9 @@ function html_override_settings_form() {
 }
 
 
+/**
+ * Flush all caches to force updates to delivery callbacks on overridden nodes.
+ */
 function html_override_flush_cache() {
   if (!isset($_GET['token']) || !drupal_valid_token($_GET['token'], current_path())) {
     return MENU_ACCESS_DENIED;
@@ -76,7 +118,13 @@ function html_override_flush_cache() {
   drupal_goto();
 }
 
+
+
+/**
+ * Implements hook_menu().
+ */
 function html_override_menu() {
+  // Admin functions
   $items['admin/config/html-override'] = array(
     'title' => 'HTML Override Settings',
     'page callback' => 'drupal_get_form',
@@ -88,6 +136,9 @@ function html_override_menu() {
     'access arguments' => array('flush caches'),
     'type' => MENU_CALLBACK,
   );
+
+  // Dynamically generated paths which force overridden nodes to use
+  // this module's deliver callback to bypass the theme.
   $nids = variable_get('html_override_nids', array());
   foreach ($nids AS $nid) {
     $sources[] = 'node/' . $nid;
@@ -95,6 +146,8 @@ function html_override_menu() {
       'delivery callback' => 'html_override_deliver'
     );
   }
+  
+  // Taking care of aliases as well.
   $query = db_select('url_alias', 'u')
     ->fields('u', array('alias'))
     ->condition('source', $sources, 'IN');
@@ -107,6 +160,11 @@ function html_override_menu() {
   return $items;
 }
 
+
+/**
+ * Delivery callback which just loads the body field of the node and delivers it as the
+ * enture web page.
+ */
 function html_override_deliver($data) {
   $path = explode('/',$_GET['q']);
   $nid = array_pop($path);
