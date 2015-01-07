@@ -9,7 +9,7 @@ The module has a single configuration page on which the user can set the content
 On the node edit forms for the designated content types, a checkbox now appears under the body field which, when checked, forces the display of the node to bypass Drupal’s theming system.
 
 To use css and javascript files, simply use any file field attached to the node and upload them.  Once uploaded, they can be referenced in the normal ways, e.g.:
-    <link rel="stylesheet" href="path/to/files.css"> 
+    `<link rel="stylesheet" href="path/to/files.css"> `
 with one exception and two caveats.  
 
 The exception is that Drupal renames uploaded files which have a .js extension by appending a .txt extension.  Referencing these files using the txt extension does not affect their functionality:  
