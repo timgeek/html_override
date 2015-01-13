@@ -5,59 +5,64 @@
  * Implements hook_form_alter().
  */
 function html_override_form_alter(&$form, &$form_state, $form_id) {
-  $types = variable_get('html_override_types', array());
-  if (array_search(str_replace('_node_form','',$form_id), $types)) {
-    $html_override = (array_search($form['nid']['#value'], variable_get('html_override_nids', array())) !== FALSE) ? TRUE : FALSE;
-    $form['html_override'] = array(
+  if ($form_id == 'node_type_form') {
+    $field = html_override_get_form_type($form);
+    $form['display'][$field] = array(
       '#type' => 'checkbox', 
-      '#title' => t('Override the default template with the content in the body field of this node.'),
-      '#weight' => -4,  // Might need to make this dynamic
-      '#default_value' => $html_override,
+      '#title' => t('Make this content type able to override the theme.'),
+      '#default_value' => variable_get($field, FALSE),
     );
+    $options = array();
+    foreach (field_info_instances('node', $form['#node_type']->type) AS $field_name => $data) {
+      $options[$field_name] = $data['label'];
+    }
+    $form['display'][$field . '_field'] = array(
+      '#type' => 'select', 
+      '#title' => t('Select the field used to set the override'),
+      '#description' => t('This field should yield a true or false, a 1 or a 0.  If it\'s a text field, the presence of any text in it will evaluate to TRUE.'),
+      '#default_value' => variable_get($field . '_field', FALSE),
+      '#options' => $options,
+    );
+    $form['#validate'][] = 'html_override_node_form_validate';
+    $form['#submit'][] = 'html_override_node_form_submit';
   }
 }
 
-/**
- * Implements hook_node_insert().
- */
+function html_override_get_form_type($form) {
+  return 'html_override_' . $form['#node_type']->type;
+}
+
+function html_override_node_form_validate($form, &$form_state) {
+  $field = html_override_get_form_type($form);
+  if ($form_state['values'][$field] && !$form_state['values'][$field . '_field']) {
+    form_set_error('display][' . $field . '_field', 'If this node type can override the theme, a field must be specified.');
+  }
+}
+
+function html_override_node_form_submit($form, &$form_state) {
+  $field = html_override_get_form_type($form);
+  foreach (array('','_field') AS $f) {
+    variable_set($field . $f, $form_state['values'][$field . $f]);
+  }
+}
+
+
+
+
 function html_override_node_insert($node) {
-  _html_override_set_override($node);
+  _html_override_display_message($node);
 }
 
-
-/**
- * Implements hook_node_update().
- */
 function html_override_node_update($node) {
-  _html_override_set_override($node);
+  _html_override_display_message($node);
 }
 
-
-/**
- * Helper function to set the variable which tracks overridden nodes.
- *
- * @param $node
- *   object Drupal node.
- *
- */
-function _html_override_set_override($node) {
-  // Results in cleaner html_override_nids variable array
-  $nid = (int)$node->nid;
-
-  $nids = variable_get('html_override_nids', array());
-  if ($node->html_override) {
-    $nids[$nid] = $nid;
-  } else {
-    unset($nids[$nid]);
+function _html_override_display_message($node) {
+  $override = variable_get('html_override_' .  $node->type, FALSE);
+  if ($override) {
+    return drupal_set_message(html_override_cache_clear_markup(array('destination' => 'node/' . $node->nid)));
   }
-  variable_set('html_override_nids', $nids);
-
-  $destination = array('destination' => 'node/' . $node->nid);
-
-  // Set the cache clearing message if the override did not take hold.
-  drupal_set_message(html_override_cache_clear_markup($destination));
 }
-
 
 
 /**
@@ -78,31 +83,6 @@ function html_override_cache_clear_markup($destination = NULL) {
   // To Do: t() this message.
   $message = "If your HTML override settings have not taken effect, then " . $link . " to clear caches.";
   return $message;
-}
-
-/**
- * Implements hook_form().
- */
-function html_override_settings_form() {
-  $types = node_type_get_types();
-  $options = array();
-  foreach ($types AS $type => $data) {
-    $options[$type] = $data->name;
-  }
-  $form['html_override_types'] = array(
-    '#type' => 'select',
-    '#title' => t('Overrideable node types'),
-    '#options' => $options,
-    '#default_value' => variable_get('html_override_types', array()),
-    '#multiple' => TRUE,
-    '#description' => t('Select the content types which can override the site\'s theme.'),
-  );
-  $form['item'] = array(
-    '#type' => 'item',
-    '#markup' => html_override_cache_clear_markup(),
-  );
-  
-  return system_settings_form($form);
 }
 
 
@@ -137,25 +117,37 @@ function html_override_menu() {
     'type' => MENU_CALLBACK,
   );
 
-  // Dynamically generated paths which force overridden nodes to use
-  // this module's deliver callback to bypass the theme.
-  $nids = variable_get('html_override_nids', array());
-  foreach ($nids AS $nid) {
-    $sources[] = 'node/' . $nid;
-    $items['node/' . $nid] = array(
-      'delivery callback' => 'html_override_deliver'
-    );
+
+  foreach (node_type_get_types() AS $type => $data) {
+    if (variable_get('html_override_' . $type, FALSE)) {
+      // This node type is eligible; find the overridden nodes
+      $field = variable_get('html_override_' . $type . '_field', FALSE);
+      $query = new EntityFieldQuery();
+      $query->entityCondition('entity_type', 'node')
+        ->entityCondition('bundle', $type)
+        ->fieldCondition($field, 'value', '', '<>');
+      $result = $query->execute();
+      if (isset($result['node'])) {
+        foreach (array_keys($result['node']) AS $nid) {
+          $sources[] = 'node/' . $nid;
+          $items['node/' . $nid] = array(
+            'delivery callback' => 'html_override_deliver'
+          );
+        }
+      }    
+    }
   }
-  
-  // Taking care of aliases as well.
-  $query = db_select('url_alias', 'u')
-    ->fields('u', array('alias'))
-    ->condition('source', $sources, 'IN');
-  $result = $query->execute()->fetchAllKeyed(0,0);
-  foreach ($result AS $path) {
-    $items[$path] = array(
-      'delivery callback' => 'html_override_deliver'
-    );
+  if (count($sources) > 0) {
+    // Taking care of aliases as well.
+    $query = db_select('url_alias', 'u')
+      ->fields('u', array('alias'))
+      ->condition('source', $sources, 'IN');
+    $result = $query->execute()->fetchAllKeyed(0,0);
+    foreach ($result AS $path) {
+      $items[$path] = array(
+        'delivery callback' => 'html_override_deliver'
+      );
+    }
   }
   return $items;
 }
